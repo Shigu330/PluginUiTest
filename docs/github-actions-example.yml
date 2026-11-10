@@ -35,7 +35,7 @@ jobs:
       - name: Get PluginUiTest
         shell: pwsh
         run: |
-          $version = '0.1.0'
+          $version = '0.2.0'
           Invoke-WebRequest -Uri "https://github.com/Shigu330/PluginUiTest/releases/download/v$version/PluginUiTest-$version-win-x64.zip" -OutFile plugin-ui-test.zip
           Expand-Archive -Force plugin-ui-test.zip plugin-ui-test
 

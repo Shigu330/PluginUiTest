@@ -19,7 +19,8 @@ internal static class Parent
         var infos=new List<string>();
         for(var attempt=1;attempt<=50;attempt++)
         {
-            var exclude=report.Entries.Where(e=>e.Key!="constructor").Select(e=>e.Key).ToArray();
+            // A new drawing process creates the plugin again: what built its state (LoadAsync, framework work that ran) runs again too.
+            var exclude=report.Entries.Where(e=>e.Key!="constructor" && !(e.Kind is "load" or "framework" && e.Outcome==Outcome.Drawn)).Select(e=>e.Key).ToArray();
             var child=RunChild(options,hooks,plugin,exclude,report,infos);
             if(child.Done || report.Fatal is not null)break;
             if(child.Stage is not { } stage)
@@ -30,7 +31,7 @@ internal static class Parent
             }
             var detail=child.TimedOut ? $"did not return within {child.Limit} s: the drawing process was stopped" : $"the drawing process died while it ran: {child.Exit}{(child.Unhandled is null ? "" : " ("+child.Unhandled+")")}";
             var name=report.Entries.FirstOrDefault(e=>e.Key==stage.Key)?.Name ?? stage.Key[(stage.Key.IndexOf(':')+1)..];
-            Console.WriteLine($"  {(child.TimedOut ? "BLOCKED" : "CRASHED")} {name}: {detail}");
+            Console.WriteLine($"  {(child.TimedOut ? "BLOCKED" : "CRASHED"),-8} {name}: {detail}");
             if(stage.Key=="constructor")
             {
                 report.Put(new Entry{Key="constructor",Kind="constructor",Name="constructor",Outcome=child.TimedOut ? Outcome.Blocked : Outcome.Crashed,Detail=detail});

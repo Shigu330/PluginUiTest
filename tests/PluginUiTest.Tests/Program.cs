@@ -33,6 +33,17 @@ var cases = new (string Name,Action Run)[]
               && Options.Parse(["A.dll","B.dll"]).Error is { Length:>0 },"bad options refused");
         Check(Options.Matches(["Main window"],"window:Main window###MainId","Main window###MainId") && Options.Matches(["*"],"x") && !Options.Matches(["Other"],"Main window"),"run-anyway names a window with or without its ImGui id");
         Check(Options.WithoutId("Tracker###Id") == "Tracker" && Options.WithoutId("###Id") == "" && Options.WithoutId("Plain") == "Plain","ImGui id removed");
+        // 0.2.0: ###id names and --run-anyway values (X-125).
+        Check(Options.Matches(["###MainId"],"window:Main window###MainId","Main window###MainId") && Options.Matches(["MainId"],"Main window###MainId")
+              && Options.Matches(["###MapView"],"###MapView") && Options.Matches(["MapView"],"###MapView") && !Options.Matches(["Map"],"###MapView"),"run-anyway names a window by its ###id, with or without ###");
+        Check(Options.Id("Main###main") == "main" && Options.Id("Main##x") is null && Options.Id("###") is null && Options.Id("Plain") is null,"the ###id of a name");
+        Check(Options.SplitNames(@"A, B\,C ,,") is ["A","B,C"] && Options.SplitNames("") is [],"commas split names; a backslash keeps one");
+        var (repeated,_) = Options.Parse(["Mine.dll","--run-anyway=A","--run-anyway=B,###c"]);
+        Check(repeated!.RunAnyway.SequenceEqual(["A","B","###c"]),"--run-anyway repeated adds names");
+        Check(Options.RunAnywayName("Main###a",["Main###a","Other###b"]) == "\"Main\"" && Options.RunAnywayName("Tensho###a",["Tensho###a","Tensho###b"]) == "\"###a\""
+              && Options.RunAnywayName("###map",["###map"]) == "\"###map\"" && Options.RunAnywayName("Plain",["Plain"]) == "\"Plain\"" && Options.RunAnywayName("A, B",["A, B"]) == "\"A\\, B\"","the hint names a window so that only it matches");
+        foreach (var name in new[]{"Main###a","Tensho###b","###map","Plain","A, B"})
+            Check(Options.Matches(Options.SplitNames(Options.RunAnywayName(name,[name,"Tensho###z"]).Trim('"')),name),"the hint given for "+name+" designates it");
         Check(Options.ExitDrawn == 0 && Options.ExitFailed == 1 && Options.ExitUsage == 2 && Options.ExitNotCreated == 3,"exit codes 0, 1, 2, 3");
     }),
     ("the report carries the banner first, and its exit code says threw, blocked or crashed (1), not created (3)",() =>
@@ -79,6 +90,19 @@ var cases = new (string Name,Action Run)[]
         }
         Check(root.GetProperty("entries")[0].GetProperty("label").GetString() == "created" && root.GetProperty("entries")[1].GetProperty("outcome").GetString() == "crashed","labels and outcomes");
     }),
+    ("game-memory scan: a release only kept for Dispose is not followed; a call to one sealed class's Dispose is not every Dispose; real paths still found",() =>
+    {
+        var hooks = DalamudPaths.Hooks(Environment.GetEnvironmentVariable("DALAMUD_HOME"),Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+        var self = typeof(PluginUiTest.Tests.Fixtures.Scope).Assembly.Location;
+        using var scan = new MemoryScan(self,Path.GetDirectoryName(self)!,hooks);
+        Finding? Of(Type type) => scan.Scan([scan.Definition(type.GetConstructors()[0])!]);
+        Check(Of(typeof(PluginUiTest.Tests.Fixtures.KeptForUnload)) is null,"KeptForUnload: nothing (the false positive of Tensho's constructor, NativeMapReplacer.Dispose)");
+        Check(Of(typeof(PluginUiTest.Tests.Fixtures.CallsInterface)) is null,"CallsInterface: only the implementations of the interface called");
+        Check(Of(typeof(PluginUiTest.Tests.Fixtures.StartReads))?.Path.Contains("Marshal.ReadInt32",StringComparison.Ordinal) == true,"StartReads: the start that runs now is followed");
+        Check(Of(typeof(PluginUiTest.Tests.Fixtures.DisposesNow))?.Path.Contains("Reader.Dispose",StringComparison.Ordinal) == true,"DisposesNow: a constructor that disposes calls what it kept");
+        Check(Of(typeof(PluginUiTest.Tests.Fixtures.KeptThenCalled)) is not null,"KeptThenCalled: a kept delegate read back to be called is followed");
+        Check(Of(typeof(PluginUiTest.Tests.Fixtures.CallsAbstract))?.Path.Contains("ReadingStep.Run",StringComparison.Ordinal) == true,"CallsAbstract: the overrides of an abstract method are followed");
+    }),
     ("README in English then French with the banner; GPL v3; sample plugin with three windows; the CI example points at this repository",() =>
     {
         var halves = Read("README.md").Split("\n---\n");
@@ -90,7 +114,8 @@ var cases = new (string Name,Action Run)[]
         Check(licence.StartsWith("GNU GENERAL PUBLIC LICENSE",StringComparison.Ordinal) && licence.Contains("Version 3, 29 June 2007",StringComparison.Ordinal),"GPL v3");
         var sample = Read("samples/SamplePlugin/Plugin.cs");
         Check(Regex.Matches(sample,@":Window\(""").Count == 3 && sample.Contains("throw new InvalidOperationException",StringComparison.Ordinal)
-              && sample.Contains("FFXIVClientStructs",StringComparison.Ordinal),"three windows: fine, throws, reads game memory");
+              && sample.Contains("FFXIVClientStructs",StringComparison.Ordinal) && sample.Contains("new SampleLibrary.LibraryWindow()",StringComparison.Ordinal),"three windows: fine, throws, reads game memory; a fourth from the library beside it");
+        Check(Read("samples/SampleLibrary/LibraryWindow.cs").Contains("UiBuilder.IconFont",StringComparison.Ordinal),"the library's window draws with the icon font (blocked before 0.2.0)");
         var example = Read("docs/github-actions-example.yml");
         Check(example.Contains("Shigu330/PluginUiTest",StringComparison.Ordinal) && !example.Contains("Tensho",StringComparison.Ordinal),"the CI example uses this repository");
     }),

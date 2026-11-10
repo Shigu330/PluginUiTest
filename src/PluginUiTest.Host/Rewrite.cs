@@ -21,11 +21,17 @@ public static class Rewrite
     /// (two runs can go at once, a copy in use is never overwritten; the other folders of root are removed when free). <paramref name="siblings"/>:
     /// the plugin's own files copied beside it (the rest of its folder is found by the caller's resolver). <paramref name="windowSystems"/>:
     /// the plugin's own calls to WindowSystem.Draw (which blocks outside the game: it reads Dalamud's configuration service) go to
-    /// HostWindows.Draw (the test tool; the desktop application never runs the plugin's Draw handler).
+    /// HostWindows.Draw (the test tool; the desktop application never runs the plugin's Draw handler). <paramref name="libraries"/> (0.2.0):
+    /// DLLs of the plugin's folder rewritten the same way beside the copy (its own libraries that use Dalamud, such as ECommons or OtterGui,
+    /// whose icon fonts and window systems block the same way); their content is part of the folder's name.
     /// </summary>
-    public static string Plugin(string plugin,string root,string hooks,string salt,IEnumerable<string> siblings,bool windowSystems=false)
+    public static string Plugin(string plugin,string root,string hooks,string salt,IEnumerable<string> siblings,bool windowSystems=false,IReadOnlyList<string>? libraries=null)
     {
-        var hash=Convert.ToHexString(SHA256.HashData([..File.ReadAllBytes(plugin),..System.Text.Encoding.UTF8.GetBytes(salt+windowSystems+typeof(HostFonts).Module.ModuleVersionId)]))[..16];
+        libraries??=[];
+        var pluginFolder=Path.GetDirectoryName(plugin)!;
+        var bytes=new List<byte>(File.ReadAllBytes(plugin));
+        foreach(var library in libraries)bytes.AddRange(File.ReadAllBytes(Path.Combine(pluginFolder,library)));
+        var hash=Convert.ToHexString(SHA256.HashData([..bytes,..System.Text.Encoding.UTF8.GetBytes(salt+windowSystems+string.Join("|",libraries)+typeof(HostFonts).Module.ModuleVersionId)]))[..16];
         var folder=Path.Combine(root,hash);
         Directory.CreateDirectory(folder);
         foreach(var old in Directory.GetDirectories(root).Where(d=>!string.Equals(d,folder,StringComparison.OrdinalIgnoreCase)))
@@ -36,7 +42,39 @@ public static class Rewrite
             var copy=Path.Combine(folder,sibling);
             if(File.Exists(source) && !File.Exists(copy))File.Copy(source,copy);
         }
+        foreach(var library in libraries)
+        {
+            var copy=Path.Combine(folder,library);
+            Module(Path.Combine(pluginFolder,library),copy,hooks,windowSystems);
+        }
         var target=Path.Combine(folder,Path.GetFileName(plugin));
+        Module(plugin,target,hooks,windowSystems);
+        return target;
+    }
+
+    /// <summary>The names of the DLLs beside the plugin that are its own libraries using Dalamud (they reference Dalamud or its ImGui
+    /// bindings, and are not one of Dalamud's assemblies): to rewrite with it. Native DLLs and other files are left where they are.</summary>
+    public static IReadOnlyList<string> Libraries(string plugin,string hooks)
+    {
+        var folder=Path.GetDirectoryName(Path.GetFullPath(plugin))!;
+        var dalamud=Directory.Exists(hooks) ? Directory.GetFiles(hooks,"*.dll").Select(Path.GetFileName).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase) : [];
+        var found=new List<string>();
+        foreach(var file in Directory.GetFiles(folder,"*.dll").Order(StringComparer.OrdinalIgnoreCase))
+        {
+            var name=Path.GetFileName(file);
+            if(dalamud.Contains(name) || string.Equals(name,Path.GetFileName(plugin),StringComparison.OrdinalIgnoreCase))continue;
+            try
+            {
+                using var module=ModuleDefinition.ReadModule(file,new ReaderParameters{ReadingMode=ReadingMode.Deferred});
+                if(module.AssemblyReferences.Any(r=>r.Name is "Dalamud" or "Dalamud.Bindings.ImGui"))found.Add(name);
+            }
+            catch(Exception){}// a native DLL, or not an assembly: not ours to rewrite
+        }
+        return found;
+    }
+
+    private static void Module(string plugin,string target,string hooks,bool windowSystems)
+    {
         var resolver=new DefaultAssemblyResolver();
         resolver.AddSearchDirectory(hooks);resolver.AddSearchDirectory(Path.GetDirectoryName(plugin)!);
         // The plugin's portable .pdb, when beside it, is carried into the copy (an exception's stack then names the plugin's file and line).
@@ -71,8 +109,8 @@ public static class Rewrite
                         var key=called.DeclaringType.Name+"."+called.Name.Replace("get_","");
                         Sites[key]=Sites.GetValueOrDefault(key)+1;
                     }
+        // Read and counted each time (Sites), written once: a copy in use by another run is never overwritten.
         if(!File.Exists(target))module.Write(target,new WriterParameters{WriteSymbols=symbols});
-        return target;
     }
 }
 

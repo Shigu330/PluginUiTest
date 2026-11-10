@@ -14,7 +14,8 @@ namespace SamplePlugin;
 /// through IGameGui and FFXIVClientStructs in Draw, without checking the address, which outside the game is zero. Expected report: drawn,
 /// threw, skipped (game memory). With --run-anyway="Memory reader" it runs in the child process: the read near address zero becomes a
 /// NullReferenceException in .NET (measured), so it is reported as threw; a read at another bad address would end that process, and the
-/// parent would report it as crashed and draw the other windows again.
+/// parent would report it as crashed and draw the other windows again. A fourth window, "Library window", comes from SampleLibrary.dll
+/// beside the plugin and draws an icon (0.2.0: such libraries are rewritten with the plugin, so it is drawn, not blocked).
 /// </summary>
 public sealed class Plugin:IDalamudPlugin
 {
@@ -31,6 +32,7 @@ public sealed class Plugin:IDalamudPlugin
         windows.AddWindow(new FineWindow());
         windows.AddWindow(new ThrowingWindow());
         windows.AddWindow(new MemoryReader());
+        windows.AddWindow(new SampleLibrary.LibraryWindow());
         commands.AddHandler("/sampleui",new CommandInfo((_,_)=>ToggleAll()){HelpMessage="Opens the sample's windows."});
         pluginInterface.UiBuilder.Draw+=windows.Draw;
         pluginInterface.UiBuilder.OpenMainUi+=ToggleAll;

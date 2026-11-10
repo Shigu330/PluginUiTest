@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A library beside the sample plugin, as ECommons or OtterGui sit beside many plugins: it uses Dalamud too (one window that draws an
+       icon with UiBuilder.IconFont). PluginUiTest rewrites such libraries with the plugin (0.2.0); before, the icon font waited for
+       Dalamud's font service and the window was reported blocked. Dalamud's assemblies are referenced, never copied. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors><PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>SampleLibrary</AssemblyName><RootNamespace>SampleLibrary</RootNamespace>
+    <DalamudLibPath Condition="'$(DalamudLibPath)' == '' and '$(DALAMUD_HOME)' != ''">$(DALAMUD_HOME)\</DalamudLibPath>
+    <DalamudLibPath Condition="'$(DalamudLibPath)' == ''">$(APPDATA)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Dalamud"><HintPath>$(DalamudLibPath)Dalamud.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Dalamud.Bindings.ImGui"><HintPath>$(DalamudLibPath)Dalamud.Bindings.ImGui.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

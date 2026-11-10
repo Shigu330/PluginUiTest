@@ -23,7 +23,8 @@ public sealed record Options
           --timeout=S             seconds a window may take before it is reported blocked (default 30)
           --out=report.md         write the markdown report
           --json=report.json      write the JSON report
-          --run-anyway=A,B        draw these windows (or "constructor", or "*") even if they can reach game memory
+          --run-anyway=A,B        draw these windows (or "constructor", or "*") even if they can reach game memory: a window's
+                                  title, its ###id, or its full name; repeat the option or separate with commas (\, for a comma)
         Exit codes: 0 all drawn, 1 something threw, blocked or crashed, 2 usage or refusal, 3 the plugin could not be created.
         """;
 
@@ -58,7 +59,7 @@ public sealed record Options
                 case "--json":options=options with{Json=Value(arg)};break;
                 case "--child":options=options with{Child=true};break;
                 case "--exclude":options=options with{Exclude=Value(arg)};break;
-                case "--run-anyway":options=options with{RunAnyway=Value(arg).Split(',',StringSplitOptions.RemoveEmptyEntries|StringSplitOptions.TrimEntries)};break;
+                case "--run-anyway":options=options with{RunAnyway=[..options.RunAnyway,..SplitNames(Value(arg))]};break;
                 case "--frames":
                     if(!int.TryParse(Value(arg),out var frames) || frames is <1 or >10_000)return (null,"--frames=N: a number from 1 to 10000");
                     options=options with{Frames=frames};break;
@@ -94,11 +95,46 @@ public sealed record Options
                || fullPath.Replace('/','\\').Contains("\\XIVLauncher\\installedPlugins\\",StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>True when a name given to --run-anyway designates this entry (its key, window name with or without its ImGui id, type, or "*").</summary>
+    /// <summary>The names of one --run-anyway value: split on commas (a backslash before a comma keeps it in the name), trimmed.</summary>
+    public static IReadOnlyList<string> SplitNames(string value)
+    {
+        var names=new List<string>();
+        var current=new System.Text.StringBuilder();
+        for(var i=0;i<value.Length;i++)
+        {
+            if(value[i]=='\\' && i+1<value.Length && value[i+1]==','){current.Append(',');i++;continue;}
+            if(value[i]==','){names.Add(current.ToString().Trim());current.Clear();continue;}
+            current.Append(value[i]);
+        }
+        names.Add(current.ToString().Trim());
+        return names.Where(n=>n.Length>0).ToArray();
+    }
+
+    /// <summary>True when a name given to --run-anyway designates this entry: its key, a window's full name, its title (without the ImGui id),
+    /// its ###id (with or without the ###), its type, or "*".</summary>
     public static bool Matches(IReadOnlyList<string> runAnyway,params string?[] names)
-        => runAnyway.Any(given=>given=="*" || names.Any(name=>name is { Length:>0 } && (string.Equals(given,name,StringComparison.OrdinalIgnoreCase)
-            || string.Equals(given,WithoutId(name),StringComparison.OrdinalIgnoreCase))));
+        => runAnyway.Any(given=>given=="*" || names.Any(name=>name is { Length:>0 } && Designates(given,name)));
+
+    private static bool Designates(string given,string name)
+    {
+        static bool Same(string a,string b)=>a.Length>0 && string.Equals(a,b,StringComparison.OrdinalIgnoreCase);
+        if(Same(given,name) || Same(given,WithoutId(name)))return true;
+        return Id(name) is { } id && (Same(given,id) || Same(given,"###"+id));
+    }
 
     /// <summary>An ImGui window name without its id part ("Main###id" → "Main", "Main##id" → "Main").</summary>
     public static string WithoutId(string name)=>name.IndexOf("##",StringComparison.Ordinal) is var at and >=0 ? name[..at] : name;
+
+    /// <summary>The ###id of an ImGui window name ("Main###main" → "main"), or null.</summary>
+    public static string? Id(string name)=>name.IndexOf("###",StringComparison.Ordinal) is var at and >=0 && at+3<name.Length ? name[(at+3)..] : null;
+
+    /// <summary>What to give --run-anyway for this window, quoted for a command line: its title when no other window has it, else its ###id,
+    /// else its full name; a comma in it written \,.</summary>
+    public static string RunAnywayName(string name,IEnumerable<string> others)
+    {
+        var title=WithoutId(name);
+        var shared=others.Count(other=>string.Equals(WithoutId(other),title,StringComparison.OrdinalIgnoreCase))>1;
+        var chosen=title.Length>0 && !shared ? title : Id(name) is { } id ? "###"+id : name;
+        return "\""+chosen.Replace(",","\\,")+"\"";
+    }
 }

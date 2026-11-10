@@ -98,7 +98,7 @@ public sealed class RunReport
 
     /// <summary>The result word: created (constructor), ran (OpenMainUi, OpenConfigUi), else the outcome.</summary>
     public static string Label(Entry entry)=>entry.Outcome==Outcome.Drawn && entry.Kind=="constructor" ? "created"
-        : entry.Outcome==Outcome.Drawn && entry.Kind is "OpenMainUi" or "OpenConfigUi" ? "ran" : entry.Outcome.ToString().ToLowerInvariant();
+        : entry.Outcome==Outcome.Drawn && entry.Kind is "OpenMainUi" or "OpenConfigUi" or "load" or "framework" ? "ran" : entry.Outcome.ToString().ToLowerInvariant();
 
     /// <summary>The version of the JSON report's shape (docs/report.schema.json). Removing or renaming a field, or changing its meaning,
     /// raises it; a new optional field does not.</summary>

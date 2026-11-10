@@ -8,7 +8,7 @@
   "properties": {
     "$schema": { "type": "string", "description": "The URL of this schema." },
     "schemaVersion": { "const": 1, "description": "The version of the report's shape." },
-    "tool": { "type": "string", "pattern": "^PluginUiTest ", "description": "The tool and its version, e.g. \"PluginUiTest 0.1.0\"." },
+    "tool": { "type": "string", "pattern": "^PluginUiTest ", "description": "The tool and its version, e.g. \"PluginUiTest 0.2.0\"." },
     "banner": { "const": "Test tool, not affiliated with the Dalamud team, does not replace Dalamud." },
     "note": { "type": "string", "description": "Where Dalamud and the game data came from: nothing is redistributed." },
     "plugin": { "type": "string", "description": "The full path of the plugin DLL the user named." },
@@ -23,10 +23,10 @@
       "type": "object",
       "required": ["key", "kind", "name", "outcome", "label", "detail", "where", "frames", "vertices", "absent", "network", "logErrors"],
       "properties": {
-        "key": { "type": "string", "description": "Unique key of the part: constructor, OpenMainUi:<Type.Method>, OpenConfigUi:<Type.Method>, window:<ImGui name>, draw:<Type.Method>." },
-        "kind": { "enum": ["constructor", "OpenMainUi", "OpenConfigUi", "window", "draw-handler"] },
+        "key": { "type": "string", "description": "Unique key of the part: constructor, load (IAsyncDalamudPlugin.LoadAsync), framework:<Type.Method> (work handed to IFramework.RunOnFrameworkThread, RunOnTick or Run; #2, #3 when repeated), OpenMainUi:<Type.Method>, OpenConfigUi:<Type.Method>, window:<ImGui name>, draw:<Type.Method>." },
+        "kind": { "enum": ["constructor", "load", "framework", "OpenMainUi", "OpenConfigUi", "window", "draw-handler"], "description": "load and framework since 0.2.0 (schema version 1: values only added)." },
         "name": { "type": "string", "description": "The window's name (with its ###id if any) or the handler's method." },
-        "outcome": { "enum": ["drawn", "hidden", "threw", "blocked", "crashed", "skipped"], "description": "drawn also means created (constructor) and ran (OpenMainUi, OpenConfigUi)." },
+        "outcome": { "enum": ["drawn", "hidden", "threw", "blocked", "crashed", "skipped"], "description": "drawn also means created (constructor) and ran (load, framework, OpenMainUi, OpenConfigUi)." },
         "label": { "enum": ["created", "ran", "drawn", "hidden", "threw", "blocked", "crashed", "skipped"], "description": "The word the console and the markdown report show." },
         "detail": { "type": ["string", "null"], "description": "Exception type and message, the crash, the block, or the game-memory finding." },
         "where": { "type": ["string", "null"], "description": "The first frame of the plugin's own code in the exception's stack, or the call path to game memory." },

@@ -46,6 +46,7 @@ internal sealed class PluginFactory
             "Dalamud.Plugin.Services.ITextureProvider"=>TextureProviderProxy.Create(),
             "Dalamud.Interface.IUiBuilder"=>Ui,
             "Dalamud.Plugin.Services.ICommandManager"=>CommandManagerProxy.Create(),
+            "Dalamud.Plugin.Services.IGameInteropProvider"=>GameInteropStandIn.TryCreate() ?? AbsentProxy.Create(type),
             _=>type.IsInterface && type.Assembly==typeof(IDalamudPlugin).Assembly ? AbsentProxy.Create(type) : null,
         };
         if(value is null)return null;

@@ -1,6 +1,6 @@
 # PluginUiTest's own CI: build the library, the tool, the sample plugin and the tests against Dalamud's distribution (downloaded, never
-# committed), run the tests, publish the tool's zip, run the published tool on the sample with --no-game-data and check its three outcomes
-# (drawn, threw, skipped) and its JSON report against docs/report.schema.json. A tag v<version> publishes the zip as a GitHub release.
+# committed), run the tests, publish the tool's zip, run the published tool on the sample with --no-game-data and check its outcomes
+# (drawn, threw, skipped, and the window of the library beside it drawn, not blocked) and its JSON report against docs/report.schema.json. A tag v<version> publishes the zip as a GitHub release.
 name: CI
 
 on:
@@ -38,7 +38,7 @@ jobs:
       - name: Build (library, tool, sample, tests; warnings are errors)
         shell: pwsh
         run: |
-          foreach ($project in 'src/PluginUiTest.Host', 'src/PluginUiTest', 'samples/SamplePlugin', 'tests/PluginUiTest.Tests') {
+          foreach ($project in 'src/PluginUiTest.Host', 'src/PluginUiTest', 'samples/SampleLibrary', 'samples/SamplePlugin', 'tests/PluginUiTest.Tests') {
             dotnet build -c Release $project
             if ($LASTEXITCODE -ne 0) { throw "build failed: $project" }
           }
@@ -64,7 +64,7 @@ jobs:
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "zip=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Run the published tool on the sample and check the three outcomes
+      - name: Run the published tool on the sample and check its outcomes
         shell: pwsh
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'from-zip'
@@ -83,7 +83,8 @@ jobs:
           Expect 'window:Fine window' 'drawn' 'drawn'
           Expect 'window:Throwing window' 'threw' 'threw'
           Expect 'window:Memory reader' 'skipped' 'skipped'
-          if (($report.entries | Where-Object kind -eq 'window').Count -ne 3) { throw 'expected three windows' }
+          Expect 'window:Library window###SampleLibrary' 'drawn' 'drawn'
+          if (($report.entries | Where-Object kind -eq 'window').Count -ne 4) { throw 'expected four windows' }
           if ($report.exitCode -ne 1 -or $report.schemaVersion -ne 1) { throw 'exitCode or schemaVersion' }
           if (-not ($report.entries | Where-Object key -eq 'window:Fine window').network -contains 'blocked: GET https://example.com/') { throw "the fine window's web request was not blocked" }
           if (-not (Test-Json -Path plugin-ui-test.json -SchemaFile (Join-Path $dir 'report.schema.json'))) { throw 'the JSON report does not match docs/report.schema.json' }

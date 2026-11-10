@@ -103,10 +103,26 @@ public sealed class AbsentDataManager:Dalamud.Plugin.Services.IDataManager
     public bool FileExists(string path)=>Absent("FileExists",false);
 }
 
-/// <summary>IFramework stand-in: always on the framework thread; keeps the Update handlers so the host can tick them.</summary>
+/// <summary>Work handed to IFramework.RunOnFrameworkThread, RunOnTick or Run: kept, and run by the host when it chooses (0.2.0).</summary>
+public sealed class FrameworkWork(string api,Delegate work,Type? result,TaskCompletionSource<object?> done)
+{
+    public string Api=>api;
+    public Delegate Work=>work;
+    /// <summary>The T of the Task&lt;T&gt; the plugin was given, or null for a plain Task.</summary>
+    public Type? Result=>result;
+    public TaskCompletionSource<object?> Done=>done;
+}
+
+/// <summary>
+/// IFramework stand-in: always on the framework thread; keeps the Update handlers so the host can tick them. Since 0.2.0, the work handed
+/// to RunOnFrameworkThread, RunOnTick and Run is kept in <see cref="Queued"/> (the plugin gets a task that completes when the host runs
+/// it): a plugin that builds its windows there (SimpleTweaks: RunOnFrameworkThread(Initialize)) can then be drawn. The host decides what
+/// runs (the test tool scans each piece of work for game memory first); work never run leaves its task pending, as a game that never ticks.
+/// </summary>
 public class FrameworkProxy:DispatchProxy
 {
     public Dalamud.Plugin.Services.IFramework.OnUpdateDelegate? Handlers;
+    public static readonly List<FrameworkWork> Queued=[];
     public static Dalamud.Plugin.Services.IFramework Create()=>Create<Dalamud.Plugin.Services.IFramework,FrameworkProxy>();
     protected override object? Invoke(MethodInfo? method,object?[]? args)
     {
@@ -116,10 +132,20 @@ public class FrameworkProxy:DispatchProxy
             case "get_IsFrameworkUnloading":return false;
             case "add_Update":Handlers+=(Dalamud.Plugin.Services.IFramework.OnUpdateDelegate)args![0]!;return null;
             case "remove_Update":Handlers-=(Dalamud.Plugin.Services.IFramework.OnUpdateDelegate)args![0]!;return null;
+            case "RunOnFrameworkThread" or "RunOnTick" or "Run" when args is { Length:>0 } && args[0] is Delegate work:
+            {
+                AbsentProxy.Note("IFramework."+method.Name);
+                var result=method.ReturnType.IsGenericType ? method.ReturnType.GetGenericArguments()[0] : null;
+                var done=new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                lock(Queued)Queued.Add(new FrameworkWork(method.Name,work,result,done));
+                return result is null ? done.Task : typeof(FrameworkProxy).GetMethod(nameof(Typed),BindingFlags.NonPublic|BindingFlags.Static)!.MakeGenericMethod(result).Invoke(null,[done.Task]);
+            }
         }
         AbsentProxy.Note("IFramework."+method.Name);
         return method.ReturnType.IsValueType && method.ReturnType!=typeof(void) ? Activator.CreateInstance(method.ReturnType) : StandInDefaults.For(method.ReturnType);
     }
+
+    private static async Task<T> Typed<T>(Task<object?> task)=>(T)(await task.ConfigureAwait(false))!;
 }
 
 /// <summary>IPluginLog stand-in: warnings and errors printed and counted; every message handed to Listener when set.</summary>
@@ -220,4 +246,40 @@ public class WrapProxy:DispatchProxy
         "get_Handle"=>(ImTextureID)id,"get_Width"=>w,"get_Height"=>h,"get_Size"=>new Vector2(w,h),"Dispose"=>null,
         _=>method.ReturnType.IsValueType && method.ReturnType!=typeof(void) ? Activator.CreateInstance(method.ReturnType):null,
     };
+}
+
+/// <summary>Thrown by the IGameInteropProvider stand-in: a game hook needs the game.</summary>
+public sealed class GameOnlyException(string member):InvalidOperationException($"{member}: game hooks need the running game; PluginUiTest has none");
+
+/// <summary>
+/// IGameInteropProvider stand-in (0.2.0). A generated proxy cannot stand for it: the Hook&lt;T&gt; it returns asks T : Delegate, a constraint
+/// the runtime's DispatchProxy does not copy, so the first call threw a TypeLoadException naming Dalamud.Hooking.Hook`1 (measured on
+/// Artisan). InitializeFromAttributes does nothing (the [Signature] members stay empty, as when a signature is not found); every Hook*
+/// throws GameOnlyException, which the report shows in plain words. Each member reached is recorded.
+/// </summary>
+public sealed unsafe class GameInteropStandIn:Dalamud.Plugin.Services.IGameInteropProvider
+{
+    /// <summary>The stand-in, or null when the installed Dalamud's interface differs from the one this tool was built against.</summary>
+    public static Dalamud.Plugin.Services.IGameInteropProvider? TryCreate()
+    {
+        try{return New();}catch(TypeLoadException){return null;}catch(MissingMethodException){return null;}
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static Dalamud.Plugin.Services.IGameInteropProvider New()=>new GameInteropStandIn();
+
+    private static Exception Hook(string member)
+    {
+        AbsentProxy.Note("IGameInteropProvider."+member);
+        return new GameOnlyException("IGameInteropProvider."+member);
+    }
+
+    public void InitializeFromAttributes(object self)=>AbsentProxy.Note("IGameInteropProvider.InitializeFromAttributes");
+    public Dalamud.Hooking.Hook<T> HookFromFunctionPointerVariable<T>(nint address,T detour) where T:Delegate=>throw Hook("HookFromFunctionPointerVariable");
+    public Dalamud.Hooking.Hook<T> HookFromImport<T>(System.Diagnostics.ProcessModule? module,string moduleName,string functionName,uint hintOrOrdinal,T detour) where T:Delegate=>throw Hook("HookFromImport");
+    public Dalamud.Hooking.Hook<T> HookFromSymbol<T>(string moduleName,string exportName,T detour,Dalamud.Plugin.Services.IGameInteropProvider.HookBackend backend=default) where T:Delegate=>throw Hook("HookFromSymbol");
+    public Dalamud.Hooking.Hook<T> HookFromAddress<T>(nint procAddress,T detour,Dalamud.Plugin.Services.IGameInteropProvider.HookBackend backend=default) where T:Delegate=>throw Hook("HookFromAddress");
+    public Dalamud.Hooking.Hook<T> HookFromAddress<T>(nuint procAddress,T detour,Dalamud.Plugin.Services.IGameInteropProvider.HookBackend backend=default) where T:Delegate=>throw Hook("HookFromAddress");
+    public Dalamud.Hooking.Hook<T> HookFromAddress<T>(void* procAddress,T detour,Dalamud.Plugin.Services.IGameInteropProvider.HookBackend backend=default) where T:Delegate=>throw Hook("HookFromAddress");
+    public Dalamud.Hooking.Hook<T> HookFromSignature<T>(string signature,T detour,Dalamud.Plugin.Services.IGameInteropProvider.HookBackend backend=default) where T:Delegate=>throw Hook("HookFromSignature");
 }

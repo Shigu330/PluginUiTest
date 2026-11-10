@@ -21,10 +21,16 @@ because it can reach game memory. Windows only.
    XIVLauncher's game path, else Steam's default folder; none with `--no-game-data` (CI).
 3. Copies your DLL to `%LOCALAPPDATA%\PluginUiTest\copies` and rewrites, in the copy only, the calls that block outside the game:
    `UiBuilder.IconFont`, `IconFontFixedWidth`, `DefaultFont`, `MonoFont` (they wait for Dalamud's font service) point at the tool's font;
-   your own calls to `WindowSystem.Draw` (it waits for Dalamud's configuration service) draw through the tool. Your build is not touched.
-4. Creates the plugin as Dalamud's IoC does: the `IDalamudPlugin` class, its `[PluginService]` properties and fields filled, its constructor
+   your own calls to `WindowSystem.Draw` (it waits for Dalamud's configuration service) draw through the tool. The libraries beside your
+   DLL that use Dalamud (ECommons, OtterGui, KamiToolKit, your own) are rewritten the same way beside the copy. Your build is not touched.
+4. Creates the plugin as Dalamud's IoC does: the class that implements `IDalamudPlugin` or `IAsyncDalamudPlugin` (its `LoadAsync` is then
+   awaited, as the part `load`), its `[PluginService]` properties and fields filled, its constructor
    given `IDalamudPluginInterface` and the services it asks for (stand-ins, see "Limits"); `Create<T>` and `Inject` work. Its configuration
-   folder is a fresh folder of the tool (`%LOCALAPPDATA%\PluginUiTest\config`), never your `pluginConfigs`.
+   folder is a fresh folder of the tool (`%LOCALAPPDATA%\PluginUiTest\config`), never your `pluginConfigs`. The assemblies and native
+   libraries your `.deps.json` names are found as Dalamud's plugin load context finds them (`runtimes\win-x64\native` beside your DLL,
+   then Dalamud's own, e.g. SQLite's `e_sqlite3`). The work the plugin hands to `IFramework.RunOnFrameworkThread`, `RunOnTick` or `Run`
+   is kept and run, each piece as its own part (`framework`, scanned for game memory first), after the constructor, while `LoadAsync`
+   waits, and after the main and settings UI are opened: a plugin that builds its windows there can be drawn.
 5. Invokes the `OpenMainUi` and `OpenConfigUi` subscribers, finds every `WindowSystem` reachable from the plugin (its fields, a few levels
    down, static fields, and `UiBuilder.Draw`'s targets), and draws each window alone for N frames as Dalamud does: `Update`,
    `DrawConditions`, `PreDraw`, position, size and constraints, `Begin`, `Draw`, `End`, `PostDraw`, then Dalamud's ImGui error recovery.
@@ -60,7 +66,7 @@ because it can reach game memory. Windows only.
 - **From source**: `git clone https://github.com/Shigu330/PluginUiTest`, then `dotnet run -c Release --project src/PluginUiTest -- …`
   (it builds against Dalamud's distribution too: `DALAMUD_HOME` or `%APPDATA%\XIVLauncher\addon\Hooks\dev`).
 - Layout: `src/PluginUiTest.Host` (the library: Dalamud paths and run-time resolution, service stand-ins, headless ImGui, IL rewrite and
-  call graph), `src/PluginUiTest` (the tool), `samples/SamplePlugin` (a three-window sample), `tests/PluginUiTest.Tests` (the pure parts),
+  call graph), `src/PluginUiTest` (the tool), `samples/SamplePlugin` (a sample with three windows and a fourth from `samples/SampleLibrary` beside it), `tests/PluginUiTest.Tests` (the pure parts and the game-memory scan),
   `docs/` (the CI example and the report's JSON schema).
 
 ## Usage
@@ -79,10 +85,10 @@ dotnet run -c Release --project src/PluginUiTest -- path\to\YourPlugin.dll [opti
 | `--frames=N` | frames per window (default 20) |
 | `--timeout=S` | seconds a part may take before it is reported blocked (default 30; the constructor gets twice that) |
 | `--out=report.md`, `--json=report.json` | write the report |
-| `--run-anyway=A,B` | run these parts even if they can reach game memory: a window name (with or without its `###id`), `constructor`, or `*` |
+| `--run-anyway=A,B` | run these parts even if they can reach game memory: a window's title, its `###id` (with or without `###`) or its full name, `constructor`, or `*`; repeat the option or separate names with commas (`\,` for a comma in a name). The report gives, for each part it skipped, the name to pass |
 
 Measured on the sample plugin of this repository (also checked by its CI on every push) (`samples/SamplePlugin`: a fine window, a window that throws, a window that reads a game
-window through `IGameGui` and FFXIVClientStructs):
+window through `IGameGui` and FFXIVClientStructs, and a window of `samples/SampleLibrary`, a library beside the plugin that draws an icon):
 
 ```text
   CREATED  Plugin constructor: created; UiBuilder subscribers: Draw 1, OpenMainUi 1, OpenConfigUi 0
@@ -90,8 +96,9 @@ window through `IGameGui` and FFXIVClientStructs):
   DRAWN    Fine window
   THREW    Throwing window: InvalidOperationException: Sample failure: this window throws in Draw on purpose. [at ThrowingWindow.Draw]
   SKIPPED  Memory reader: its code can reach game memory: Dalamud raw game address: IGameGui.GetAddonByName. To draw it anyway: --run-anyway="Memory reader" [at MemoryReader.Draw → Dalamud raw game address: IGameGui.GetAddonByName]
+  DRAWN    Library window###SampleLibrary
 
-FAIL (exit 1): 3 windows and draw handlers: 1 drawn, 0 hidden, 1 threw, 0 blocked, 0 crashed, 1 skipped
+FAIL (exit 1): 4 windows and draw handlers: 2 drawn, 0 hidden, 1 threw, 0 blocked, 0 crashed, 1 skipped
 ```
 
 The report also lists, per part, the Dalamud members reached through the stand-ins, the network requests blocked (the fine window's
@@ -104,13 +111,13 @@ The report also lists, per part, the Dalamud members reached through the stand-i
 | 0 | every part drawn, hidden (`DrawConditions` false) or skipped for game memory |
 | 1 | something threw, blocked or crashed |
 | 2 | usage or refusal (a folder, an installed plugin, no such file, no Dalamud) |
-| 3 | the plugin could not be created (no `IDalamudPlugin` class, a service it asks that the tool cannot give, its constructor threw, blocked, crashed, or can reach game memory) |
+| 3 | the plugin could not be created (no `IDalamudPlugin` or `IAsyncDalamudPlugin` class, a service it asks that the tool cannot give, its constructor threw, blocked, crashed, or can reach game memory) |
 
 ## JSON report
 
 `--json=<file>` writes the report described by [`docs/report.schema.json`](docs/report.schema.json) (JSON Schema 2020-12). It is
 stable: `schemaVersion` is 1, and it is raised only when a field is removed or renamed or its meaning changes; a new optional field does
-not raise it. Top level: `$schema`, `schemaVersion`, `tool` (`PluginUiTest 0.1.0`), `banner`, `note`, `plugin`, `facts`, `result` (the
+not raise it. Top level: `$schema`, `schemaVersion`, `tool` (`PluginUiTest 0.2.0`), `banner`, `note`, `plugin`, `facts`, `result` (the
 summary line), `exitCode` (0 to 3, above), `fatal` (why the plugin could not be created, else null) and `entries`, one per part in the
 order they ran: `key`, `kind` (`constructor`, `OpenMainUi`, `OpenConfigUi`, `window`, `draw-handler`), `name`, `outcome` (`drawn`,
 `hidden`, `threw`, `blocked`, `crashed`, `skipped`), `label` (the word the console shows: `created`, `ran` or the outcome), `detail`,
@@ -130,17 +137,26 @@ three outcomes (drawn, threw, skipped) and the JSON report against its schema. T
 
 - Windows only (x64), .NET 10; Dalamud API of the installed Dalamud (built and measured with Dalamud.NET.Sdk 15).
 - The game-memory analysis is an upper bound of the paths it follows (a branch may never run): calls, constructors, lambdas and
-  delegates made on the path, async and iterator bodies, overrides of your own virtual and interface methods. It does not follow
-  delegates stored elsewhere and called later, reflection, or native code; the child process is the second safeguard. Delegates handed to
-  Dalamud (events, commands, `IFramework.RunOnFrameworkThread`) are not followed: the stand-ins never call them.
+  delegates made on the path, async and iterator bodies, overrides of your own virtual and interface methods (only in the types that
+  derive from the called one or implement its interface). A delegate made on the path and only kept in a field of yours (stored, or added
+  to a collection held in a field, e.g. a release kept for `Dispose`) is followed only if a method on the path reads that field otherwise
+  than to add to it. It does not follow delegates stored elsewhere and called later, reflection, or native code; the child process is the
+  second safeguard. Delegates handed to Dalamud (events, commands) are not followed: the stand-ins never call them; framework work
+  (`RunOnFrameworkThread`, `RunOnTick`, `Run`) is scanned as its own part when the tool runs it.
 - What the stand-ins answer: `IDataManager` reads the game data with Lumina when it is there (English sheets), else answers absent;
   `ITextureProvider` gives game icons read with Lumina (none without game data); `IFramework` is always "on the framework thread" and
-  never ticks; `IPluginLog` keeps errors for the report; `ICommandManager` accepts commands (never runs them); `IUiBuilder` records its
+  never ticks (its `Update` handlers never run; the work handed to it runs once, as its own part; work skipped for game memory leaves
+  its task pending, as in a game that never ticks); `IGameInteropProvider` does nothing for `InitializeFromAttributes` (the `[Signature]`
+  members stay empty, as when a signature is not found) and every `Hook*` throws `GameOnlyException` (reported as "game hooks need the
+  running game"); `IPluginLog` keeps errors for the report; `ICommandManager` accepts commands (never runs them); `IUiBuilder` records its
   subscribers and gives the tool's font; every other Dalamud interface answers default values (false, 0, null, empty, completed tasks,
   another stand-in for an interface) and records each member reached. Nothing of the game runs: a window that needs the game to show
   something shows its "not available" state.
 - Fonts: Dalamud's own fonts from `dalamudAssets\dev\UIRes` when present, else ImGui's default font (icons then draw as `?`).
 - Network: requests that skip .NET's HTTP diagnostics and set their own proxy, and raw sockets, are recorded at best, not blocked.
+- Hooks are not emulated: a plugin that creates a hook in its constructor or its framework work stops there with `GameOnlyException`
+  under `--run-anyway`, even if the window drawn later would not need it. Most large plugins sign or hook game memory from their
+  constructor: by default the tool says so and does not create them (exit 3), see [docs/compatibility.md](docs/compatibility.md).
 - `Dispose` is not called; the child process ends instead.
 
 ## Licence
@@ -171,12 +187,18 @@ votre code), ce qui a bloqué, ce qui a planté, et ce qu'il n'a pas lancé parc
    depuis `--sqpack=<dossier>`, sinon le dossier du jeu de XIVLauncher, sinon celui de Steam ; aucune avec `--no-game-data` (CI).
 3. Copie votre DLL dans `%LOCALAPPDATA%\PluginUiTest\copies` et réécrit, dans la copie seulement, les appels qui bloquent hors du jeu :
    `UiBuilder.IconFont`, `IconFontFixedWidth`, `DefaultFont`, `MonoFont` (ils attendent le service des polices de Dalamud) lisent la police
-   de l'outil ; vos propres appels à `WindowSystem.Draw` (il attend le service de configuration de Dalamud) dessinent par l'outil. Votre
-   build n'est pas touché.
-4. Crée le plugin comme l'IoC de Dalamud : la classe `IDalamudPlugin`, ses propriétés et champs `[PluginService]` remplis, son
+   de l'outil ; vos propres appels à `WindowSystem.Draw` (il attend le service de configuration de Dalamud) dessinent par l'outil. Les
+   bibliothèques à côté de votre DLL qui utilisent Dalamud (ECommons, OtterGui, KamiToolKit, les vôtres) sont réécrites de même à côté de
+   la copie. Votre build n'est pas touché.
+4. Crée le plugin comme l'IoC de Dalamud : la classe qui implémente `IDalamudPlugin` ou `IAsyncDalamudPlugin` (son `LoadAsync` est
+   alors attendu, comme partie `load`), ses propriétés et champs `[PluginService]` remplis, son
    constructeur reçoit `IDalamudPluginInterface` et les services qu'il demande (des remplaçants, voir « Limites ») ; `Create<T>` et
    `Inject` marchent. Son dossier de configuration est un dossier neuf de l'outil (`%LOCALAPPDATA%\PluginUiTest\config`), jamais vos
-   `pluginConfigs`.
+   `pluginConfigs`. Les assemblies et bibliothèques natives que nomme votre `.deps.json` sont trouvées comme le contexte de chargement
+   de Dalamud les trouve (`runtimes\win-x64\native` à côté de votre DLL, puis celui de Dalamud, par exemple `e_sqlite3` de SQLite). Le
+   travail que le plugin donne à `IFramework.RunOnFrameworkThread`, `RunOnTick` ou `Run` est gardé et lancé, chaque morceau comme sa
+   propre partie (`framework`, analysée d'abord pour la mémoire du jeu), après le constructeur, pendant que `LoadAsync` attend, et après
+   l'ouverture des interfaces principale et de réglages : un plugin qui construit ses fenêtres là peut être dessiné.
 5. Appelle les abonnés de `OpenMainUi` et `OpenConfigUi`, trouve chaque `WindowSystem` joignable depuis le plugin (ses champs, sur
    quelques niveaux, les champs statiques, et les cibles de `UiBuilder.Draw`), et dessine chaque fenêtre seule pendant N images comme
    Dalamud : `Update`, `DrawConditions`, `PreDraw`, position, taille et contraintes, `Begin`, `Draw`, `End`, `PostDraw`, puis la reprise
@@ -216,7 +238,8 @@ votre code), ce qui a bloqué, ce qui a planté, et ce qu'il n'a pas lancé parc
   (il compile lui aussi contre la distribution de Dalamud : `DALAMUD_HOME` ou `%APPDATA%\XIVLauncher\addon\Hooks\dev`).
 - Organisation : `src/PluginUiTest.Host` (la bibliothèque : chemins et résolution de Dalamud à l'exécution, remplaçants des services,
   ImGui sans fenêtre, réécriture et graphe d'appels de l'IL), `src/PluginUiTest` (l'outil), `samples/SamplePlugin` (un exemple à trois
-  fenêtres), `tests/PluginUiTest.Tests` (les parties pures), `docs/` (l'exemple de CI et le schéma JSON du rapport).
+  fenêtres, et une quatrième de `samples/SampleLibrary` à côté), `tests/PluginUiTest.Tests` (les parties pures et l'analyse de la
+  mémoire du jeu), `docs/` (l'exemple de CI et le schéma JSON du rapport).
 
 ## Utilisation
 
@@ -234,10 +257,11 @@ dotnet run -c Release --project src/PluginUiTest -- chemin\vers\VotrePlugin.dll 
 | `--frames=N` | images par fenêtre (20 par défaut) |
 | `--timeout=S` | secondes qu'une partie peut prendre avant d'être dite bloquée (30 par défaut ; le double pour le constructeur) |
 | `--out=rapport.md`, `--json=rapport.json` | écrit le rapport |
-| `--run-anyway=A,B` | lance ces parties même si elles peuvent atteindre la mémoire du jeu : un nom de fenêtre (avec ou sans son `###id`), `constructor`, ou `*` |
+| `--run-anyway=A,B` | lance ces parties même si elles peuvent atteindre la mémoire du jeu : le titre d'une fenêtre, son `###id` (avec ou sans `###`) ou son nom entier, `constructor`, ou `*` ; répéter l'option ou séparer les noms par des virgules (`\,` pour une virgule dans un nom). Le rapport donne, pour chaque partie sautée, le nom à passer |
 
 Mesuré sur le plugin d'exemple de ce dépôt (vérifié aussi par sa CI à chaque push) (`samples/SamplePlugin` : une fenêtre sans souci, une fenêtre qui lève une exception, une
-fenêtre qui lit une fenêtre du jeu par `IGameGui` et FFXIVClientStructs) :
+fenêtre qui lit une fenêtre du jeu par `IGameGui` et FFXIVClientStructs, et une fenêtre de `samples/SampleLibrary`, une bibliothèque à
+côté du plugin qui dessine une icône) :
 
 ```text
   CREATED  Plugin constructor: created; UiBuilder subscribers: Draw 1, OpenMainUi 1, OpenConfigUi 0
@@ -245,8 +269,9 @@ fenêtre qui lit une fenêtre du jeu par `IGameGui` et FFXIVClientStructs) :
   DRAWN    Fine window
   THREW    Throwing window: InvalidOperationException: Sample failure: this window throws in Draw on purpose. [at ThrowingWindow.Draw]
   SKIPPED  Memory reader: its code can reach game memory: Dalamud raw game address: IGameGui.GetAddonByName. To draw it anyway: --run-anyway="Memory reader" [at MemoryReader.Draw → Dalamud raw game address: IGameGui.GetAddonByName]
+  DRAWN    Library window###SampleLibrary
 
-FAIL (exit 1): 3 windows and draw handlers: 1 drawn, 0 hidden, 1 threw, 0 blocked, 0 crashed, 1 skipped
+FAIL (exit 1): 4 windows and draw handlers: 2 drawn, 0 hidden, 1 threw, 0 blocked, 0 crashed, 1 skipped
 ```
 
 Le rapport donne aussi, par partie, les membres de Dalamud atteints par les remplaçants, les requêtes réseau bloquées (le `OnOpen` de la
@@ -259,13 +284,13 @@ fenêtre sans souci demande une fois `https://example.com/` : `blocked: GET http
 | 0 | chaque partie dessinée, cachée (`DrawConditions` faux) ou sautée pour la mémoire du jeu |
 | 1 | une partie a levé une exception, bloqué ou planté |
 | 2 | utilisation ou refus (un dossier, un plugin installé, un fichier absent, pas de Dalamud) |
-| 3 | le plugin n'a pas pu être créé (pas de classe `IDalamudPlugin`, un service demandé que l'outil ne sait pas donner, son constructeur a levé une exception, bloqué, planté, ou peut atteindre la mémoire du jeu) |
+| 3 | le plugin n'a pas pu être créé (pas de classe `IDalamudPlugin` ni `IAsyncDalamudPlugin`, un service demandé que l'outil ne sait pas donner, son constructeur a levé une exception, bloqué, planté, ou peut atteindre la mémoire du jeu) |
 
 ## Rapport JSON
 
 `--json=<fichier>` écrit le rapport décrit par [`docs/report.schema.json`](docs/report.schema.json) (JSON Schema 2020-12). Il est
 stable : `schemaVersion` vaut 1 et ne monte que si un champ est retiré, renommé ou change de sens ; un nouveau champ facultatif ne le
-fait pas monter. Niveau haut : `$schema`, `schemaVersion`, `tool` (`PluginUiTest 0.1.0`), `banner`, `note`, `plugin`, `facts`, `result`
+fait pas monter. Niveau haut : `$schema`, `schemaVersion`, `tool` (`PluginUiTest 0.2.0`), `banner`, `note`, `plugin`, `facts`, `result`
 (la ligne de résumé), `exitCode` (0 à 3, plus haut), `fatal` (pourquoi le plugin n'a pas pu être créé, sinon null) et `entries`, une par
 partie dans l'ordre où elles ont tourné : `key`, `kind` (`constructor`, `OpenMainUi`, `OpenConfigUi`, `window`, `draw-handler`), `name`,
 `outcome` (`drawn`, `hidden`, `threw`, `blocked`, `crashed`, `skipped`), `label` (le mot de la console : `created`, `ran` ou le
@@ -286,12 +311,18 @@ est notée et lève une `GameDataAbsentException` claire ; le code qui a besoin 
 - Windows seulement (x64), .NET 10 ; l'API de Dalamud est celle du Dalamud installé (construit et mesuré avec Dalamud.NET.Sdk 15).
 - L'analyse de la mémoire du jeu est une borne haute des chemins qu'elle suit (une branche peut ne jamais tourner) : appels,
   constructeurs, lambdas et délégués créés sur le chemin, corps async et itérateurs, redéfinitions de vos méthodes virtuelles et
-  d'interface. Elle ne suit pas les délégués rangés ailleurs et appelés plus tard, la réflexion ni le code natif ; le processus enfant est
-  la seconde protection. Les délégués donnés à Dalamud (événements, commandes, `IFramework.RunOnFrameworkThread`) ne sont pas suivis : les
-  remplaçants ne les appellent jamais.
+  d'interface (seulement dans les types qui dérivent du type appelé ou implémentent son interface). Un délégué créé sur le chemin et
+  seulement gardé dans un de vos champs (rangé, ou ajouté à une collection tenue par un champ, par exemple une libération gardée pour
+  `Dispose`) n'est suivi que si une méthode du chemin lit ce champ autrement que pour y ajouter. Elle ne suit pas les délégués rangés
+  ailleurs et appelés plus tard, la réflexion ni le code natif ; le processus enfant est la seconde protection. Les délégués donnés à
+  Dalamud (événements, commandes) ne sont pas suivis : les remplaçants ne les appellent jamais ; le travail du framework
+  (`RunOnFrameworkThread`, `RunOnTick`, `Run`) est analysé comme sa propre partie quand l'outil le lance.
 - Ce que répondent les remplaçants : `IDataManager` lit les données du jeu avec Lumina quand elles sont là (feuilles anglaises), sinon
   répond absent ; `ITextureProvider` donne les icônes du jeu lues avec Lumina (aucune sans données du jeu) ; `IFramework` est toujours
-  « sur le thread du framework » et ne fait jamais de tick ; `IPluginLog` garde les erreurs pour le rapport ; `ICommandManager` accepte
+  « sur le thread du framework » et ne fait jamais de tick (ses abonnés `Update` ne tournent jamais ; le travail qu'on lui donne tourne
+  une fois, comme sa propre partie ; un travail sauté pour la mémoire du jeu laisse sa tâche en attente, comme dans un jeu qui ne fait
+  jamais de tick) ; `IGameInteropProvider` ne fait rien pour `InitializeFromAttributes` (les membres `[Signature]` restent vides, comme
+  quand une signature n'est pas trouvée) et chaque `Hook*` lève `GameOnlyException` (dit « game hooks need the running game ») ; `IPluginLog` garde les erreurs pour le rapport ; `ICommandManager` accepte
   les commandes (ne les lance jamais) ; `IUiBuilder` note ses abonnés et donne la police de l'outil ; toute autre interface de Dalamud
   répond des valeurs par défaut (faux, 0, null, vide, tâches finies, un autre remplaçant pour une interface) et note chaque membre
   atteint. Rien du jeu ne tourne : une fenêtre qui a besoin du jeu pour montrer quelque chose montre son état « indisponible ».
@@ -299,6 +330,10 @@ est notée et lève une `GameDataAbsentException` claire ; le code qui a besoin 
   s'affichent alors en `?`).
 - Réseau : les requêtes qui évitent les diagnostics HTTP de .NET et fixent leur propre proxy, et les sockets brutes, sont au mieux notées,
   pas bloquées.
+- Les crochets ne sont pas imités : un plugin qui crée un crochet dans son constructeur ou son travail du framework s'arrête là avec
+  `GameOnlyException` sous `--run-anyway`, même si la fenêtre dessinée ensuite n'en aurait pas besoin. La plupart des gros plugins
+  cherchent des signatures ou posent des crochets dès leur constructeur : par défaut l'outil le dit et ne les crée pas (sortie 3), voir
+  [docs/compatibility.md](docs/compatibility.md).
 - `Dispose` n'est pas appelé ; le processus enfant se termine à la place.
 
 ## Licence
