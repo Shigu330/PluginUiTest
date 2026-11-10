@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+artifacts/
+TestResults/
+*.zip
+plugin-ui-test.md
+plugin-ui-test.json
+out/

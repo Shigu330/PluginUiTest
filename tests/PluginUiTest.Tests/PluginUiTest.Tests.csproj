@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The pure parts of PluginUiTest (command line and refusals, report, Dalamud and game paths), linked and tested without Dalamud and
+       without a package: dotnet run on this project prints each case and exits 1 on a failure. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType><TargetFramework>net10.0-windows</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/PluginUiTest.Host/DalamudPaths.cs;../../src/PluginUiTest/Options.cs;../../src/PluginUiTest/Report.cs" Link="Linked/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

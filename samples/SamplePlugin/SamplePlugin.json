@@ -1,0 +1,8 @@
+{
+  "Author": "PluginUiTest",
+  "Name": "PluginUiTest Sample",
+  "Punchline": "A sample for PluginUiTest: three windows, one fine, one that throws, one that reads game memory.",
+  "Description": "Not a real plugin: the sample PluginUiTest's README runs to show its report. Never install it.",
+  "ApplicableVersion": "any",
+  "Tags": ["sample"]
+}

@@ -1,0 +1,121 @@
+# PluginUiTest's own CI: build the library, the tool, the sample plugin and the tests against Dalamud's distribution (downloaded, never
+# committed), run the tests, publish the tool's zip, run the published tool on the sample with --no-game-data and check its three outcomes
+# (drawn, threw, skipped) and its JSON report against docs/report.schema.json. A tag v<version> publishes the zip as a GitHub release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: '1'
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Download Dalamud's distribution
+        shell: pwsh
+        run: |
+          $hooks = Join-Path $env:RUNNER_TEMP 'dalamud'
+          Invoke-WebRequest -Uri 'https://goatcorp.github.io/dalamud-distrib/latest.zip' -OutFile (Join-Path $env:RUNNER_TEMP 'dalamud.zip')
+          Expand-Archive -Path (Join-Path $env:RUNNER_TEMP 'dalamud.zip') -DestinationPath $hooks -Force
+          "DALAMUD_HOME=$hooks" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Dalamud.dll $((Get-Item (Join-Path $hooks 'Dalamud.dll')).VersionInfo.FileVersion)"
+
+      - name: Build (library, tool, sample, tests; warnings are errors)
+        shell: pwsh
+        run: |
+          foreach ($project in 'src/PluginUiTest.Host', 'src/PluginUiTest', 'samples/SamplePlugin', 'tests/PluginUiTest.Tests') {
+            dotnet build -c Release $project
+            if ($LASTEXITCODE -ne 0) { throw "build failed: $project" }
+          }
+
+      - name: Tests (pure parts)
+        run: dotnet run -c Release --no-build --project tests/PluginUiTest.Tests
+
+      - name: Publish the tool's zip
+        id: publish
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content src/PluginUiTest/PluginUiTest.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") { throw "tag $env:GITHUB_REF_NAME does not match the project's version $version" }
+          dotnet publish src/PluginUiTest -c Release -r win-x64 --self-contained false -o out/PluginUiTest
+          if ($LASTEXITCODE -ne 0) { throw 'publish failed' }
+          # Nothing of Dalamud, ImGui, Lumina or Mono.Cecil is shipped: they are loaded from the user's install at run time.
+          $shipped = Get-ChildItem out/PluginUiTest -File | Where-Object { $_.Name -match '^(Dalamud|Lumina|Mono\.Cecil|HexaGen|cimgui|FFXIVClientStructs|InteropGenerator)' }
+          if ($shipped) { throw "not ours, must not ship: $($shipped.Name -join ', ')" }
+          Copy-Item README.md, LICENSE, docs/report.schema.json out/PluginUiTest/
+          $zip = "PluginUiTest-$version-win-x64.zip"
+          Compress-Archive -Path out/PluginUiTest/* -DestinationPath $zip -Force
+          Get-ChildItem out/PluginUiTest -File | ForEach-Object { "  $($_.Name)" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "zip=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Run the published tool on the sample and check the three outcomes
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'from-zip'
+          Expand-Archive -Path '${{ steps.publish.outputs.zip }}' -DestinationPath $dir -Force
+          & (Join-Path $dir 'PluginUiTest.exe') samples/SamplePlugin/bin/Release/SamplePlugin.dll --no-game-data --out=plugin-ui-test.md --json=plugin-ui-test.json
+          $code = $LASTEXITCODE
+          if ($code -ne 1) { throw "expected exit code 1 (the sample has a window that throws), got $code" }
+          $report = Get-Content plugin-ui-test.json -Raw | ConvertFrom-Json
+          function Expect($key, $outcome, $label) {
+            $entry = $report.entries | Where-Object key -eq $key
+            if (-not $entry) { throw "no entry $key" }
+            if ($entry.outcome -ne $outcome -or $entry.label -ne $label) { throw "$key : expected $outcome/$label, got $($entry.outcome)/$($entry.label)" }
+            "ok  $key -> $label"
+          }
+          Expect 'constructor' 'drawn' 'created'
+          Expect 'window:Fine window' 'drawn' 'drawn'
+          Expect 'window:Throwing window' 'threw' 'threw'
+          Expect 'window:Memory reader' 'skipped' 'skipped'
+          if (($report.entries | Where-Object kind -eq 'window').Count -ne 3) { throw 'expected three windows' }
+          if ($report.exitCode -ne 1 -or $report.schemaVersion -ne 1) { throw 'exitCode or schemaVersion' }
+          if (-not ($report.entries | Where-Object key -eq 'window:Fine window').network -contains 'blocked: GET https://example.com/') { throw "the fine window's web request was not blocked" }
+          if (-not (Test-Json -Path plugin-ui-test.json -SchemaFile (Join-Path $dir 'report.schema.json'))) { throw 'the JSON report does not match docs/report.schema.json' }
+          "ok  JSON report matches its schema"
+          $report.result
+          exit 0  # the tool exited 1 on purpose (the sample throws); every check above passed
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: PluginUiTest
+          path: |
+            ${{ steps.publish.outputs.zip }}
+            plugin-ui-test.md
+            plugin-ui-test.json
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: PluginUiTest
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes=".github/release-notes/${GITHUB_REF_NAME}.md"
+          test -f "$notes"
+          gh release create "$GITHUB_REF_NAME" "PluginUiTest-${version}-win-x64.zip" --title "PluginUiTest ${version}" --notes-file "$notes" --verify-tag

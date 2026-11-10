@@ -1,0 +1,15 @@
+<Project Sdk="Dalamud.NET.Sdk">
+  <!-- A tiny Dalamud plugin to show what PluginUiTest reports: three windows, one fine, one that throws in Draw, one that reads game
+       memory in Draw (FFXIVClientStructs). Built against the installed Dalamud (Dalamud.NET.Sdk, DALAMUD_HOME or Hooks\dev) like any plugin;
+       built and run by this repository's CI, never published. -->
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <AssemblyName>SamplePlugin</AssemblyName>
+    <RootNamespace>SamplePlugin</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+</Project>

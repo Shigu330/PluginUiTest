@@ -1,0 +1,56 @@
+# Example workflow for a Dalamud plugin creator: build your plugin, then draw every window of it with PluginUiTest, without the game.
+# Documentation only: copy it into YOUR repository's .github/workflows/ and adapt the marked lines. PluginUiTest is a test tool, not
+# affiliated with the Dalamud team, and does not replace Dalamud.
+#
+# Nothing is redistributed: Dalamud is downloaded by your workflow (the same step your build already uses) and there is no game data in CI,
+# so the tool runs with --no-game-data (IDataManager answers "absent" and every sheet the plugin asks is recorded in the report).
+name: Plugin UI test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ui-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Same as your build: Dalamud's distribution in %APPDATA%\XIVLauncher\addon\Hooks\dev (or set DALAMUD_HOME to where you put it).
+      - name: Download Dalamud
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
+          Expand-Archive -Force latest.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+      # ADAPT: your solution or project.
+      - name: Build the plugin
+        run: dotnet build -c Release YourPlugin.sln
+
+      # The released tool (https://github.com/Shigu330/PluginUiTest/releases). ADAPT: the version you want.
+      - name: Get PluginUiTest
+        shell: pwsh
+        run: |
+          $version = '0.1.0'
+          Invoke-WebRequest -Uri "https://github.com/Shigu330/PluginUiTest/releases/download/v$version/PluginUiTest-$version-win-x64.zip" -OutFile plugin-ui-test.zip
+          Expand-Archive -Force plugin-ui-test.zip plugin-ui-test
+
+      # ADAPT: the path of your built DLL. Exit code 1 (a window threw, blocked or crashed) or 3 (the plugin could not be created) fails the job.
+      - name: Draw every window
+        shell: pwsh
+        run: |
+          ./plugin-ui-test/PluginUiTest.exe YourPlugin/bin/x64/Release/YourPlugin.dll --no-game-data --out=plugin-ui-test.md --json=plugin-ui-test.json
+          exit $LASTEXITCODE
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-ui-test
+          path: |
+            plugin-ui-test.md
+            plugin-ui-test.json
